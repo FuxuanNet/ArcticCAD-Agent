@@ -26,6 +26,49 @@ class CodeVersion(BaseModel):
     status: Literal["draft", "rendered", "error", "reviewed"] = "draft"
 
 
+class AssetEntitySummary(BaseModel):
+    id: str
+    type: str
+    layer: str | None = None
+    points: list[list[float]] = Field(default_factory=list)
+    center: list[float] | None = None
+    radius: float | None = None
+    startAngle: float | None = None
+    endAngle: float | None = None
+    closed: bool = False
+    bounds: dict[str, list[float]] | None = None
+
+
+class AssetSummary(BaseModel):
+    format: Literal["dxf", "stl"]
+    units: str | None = None
+    bounds: dict[str, list[float]] | None = None
+    layers: list[str] = Field(default_factory=list)
+    entityCounts: dict[str, int] = Field(default_factory=dict)
+    entities: list[AssetEntitySummary] = Field(default_factory=list)
+    closedProfiles: list[dict[str, Any]] = Field(default_factory=list)
+    triangleCount: int | None = None
+    solidCount: int | None = None
+    isLikelyWatertight: bool | None = None
+    warnings: list[str] = Field(default_factory=list)
+    rawScriptPath: str | None = None
+
+
+class CadAsset(BaseModel):
+    id: str
+    projectId: str
+    filename: str
+    format: Literal["dxf", "stl"]
+    status: Literal["uploaded", "parsed", "parse_error"] = "uploaded"
+    byteSize: int
+    originalPath: str
+    summaryPath: str | None = None
+    rawScriptPath: str | None = None
+    createdAt: str
+    updatedAt: str
+    error: str | None = None
+
+
 class Conversation(BaseModel):
     id: str
     projectId: str
@@ -53,6 +96,8 @@ class ReviewReport(BaseModel):
     summary: str
     risks: list[ReviewRisk] = Field(default_factory=list)
     drawingUnderstanding: str
+    requirementMatch: str = ""
+    codeDesignBugs: list[str] = Field(default_factory=list)
     coldRegionNotes: list[str] = Field(default_factory=list)
     recommendAutoFix: bool = False
     observations: list[str] = Field(default_factory=list)
@@ -121,6 +166,7 @@ class ReviewRequest(BaseModel):
     versionId: str
     snapshotId: str | None = None
     snapshotBase64: str | None = None
+    conversationId: str | None = None
     reviewMode: Literal["review", "observe_for_change"] = "review"
     userRequirement: str | None = None
 
@@ -131,11 +177,22 @@ class CreateProjectInput(BaseModel):
     region: str | None = None
 
 
+class AssetRebuildRequest(BaseModel):
+    projectId: str
+    assetId: str
+    prompt: str
+    mode: Literal["reference_rebuild", "direct_insert"] = "reference_rebuild"
+    currentVersionId: str | None = None
+    conversationId: str | None = None
+
+
 class SnapshotInput(BaseModel):
     versionId: str
     conversationId: str | None = None
     imageBase64: str
     source: str = "canvas"
+    camera: dict[str, Any] | None = None
+    note: str | None = None
 
 
 JsonDict = dict[str, Any]

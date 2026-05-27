@@ -1,5 +1,9 @@
 from arcticcad.domain.models import (
     AgentEvent,
+    AssetEntitySummary,
+    AssetRebuildRequest,
+    AssetSummary,
+    CadAsset,
     ChatMessage,
     ChatRequest,
     CodeVersion,
@@ -14,6 +18,10 @@ from arcticcad.domain.models import (
 
 __all__ = [
     "AgentEvent",
+    "AssetEntitySummary",
+    "AssetRebuildRequest",
+    "AssetSummary",
+    "CadAsset",
     "ChatMessage",
     "ChatRequest",
     "CodeVersion",

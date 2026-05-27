@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { useWorkbenchStore } from "@/stores/workbench"
-import { Clock3, FileCode2, FolderPlus, MessageSquarePlus, PackageOpen, Settings } from "lucide-vue-next"
+import { Box, Clock3, FileCode2, FolderPlus, MessageSquarePlus, PackageOpen, Settings } from "lucide-vue-next"
 
 const store = useWorkbenchStore()
 const router = useRouter()
@@ -45,6 +45,29 @@ const router = useRouter()
               <span class="truncate font-medium">{{ project.name }}</span>
             </span>
             <span class="truncate pl-6 text-xs text-muted-foreground">{{ project.region }}</span>
+          </button>
+        </section>
+
+        <section class="flex flex-col gap-2">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-xs font-medium text-muted-foreground">资产</span>
+            <Badge variant="outline">{{ store.assets.length }}</Badge>
+          </div>
+          <button
+            v-for="asset in store.assets"
+            :key="asset.id"
+            class="grid grid-cols-[1fr_auto] items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition hover:bg-sidebar-accent"
+            :class="{ 'bg-sidebar-accent': asset.id === store.selectedAssetId }"
+            @click="store.selectAsset(asset.id)"
+          >
+            <span class="min-w-0">
+              <span class="flex min-w-0 items-center gap-2">
+                <Box />
+                <span class="truncate">{{ asset.filename }}</span>
+              </span>
+              <span class="block truncate pl-6 text-xs text-muted-foreground">{{ asset.format.toUpperCase() }} · {{ Math.round(asset.byteSize / 1024) }} KB</span>
+            </span>
+            <Badge variant="secondary">{{ asset.status }}</Badge>
           </button>
         </section>
 

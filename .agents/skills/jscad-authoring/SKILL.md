@@ -46,3 +46,5 @@ module.exports = { main }
   - colors: `colorize`
 - Do not use DOM, browser APIs, network calls, local file system access, remote imports, or environment variables.
 - When repairing errors, make the smallest change that fixes the reported syntax/API/geometry/render/export issue.
+- Imported DXF assets may be used as references for semantic reconstruction: prefer layer names, closed profiles, circles, arcs, and dimensions from the asset summary over raw translated code.
+- Imported STL assets are reference meshes only. Do not paste STL `points` / `faces` arrays or long `polyhedron` conversions into the main JSCAD program; rebuild a concise parametric approximation instead.

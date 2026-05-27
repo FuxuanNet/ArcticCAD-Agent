@@ -169,6 +169,16 @@ function captureSnapshot() {
   }
 }
 
+function currentCameraSnapshot() {
+  const state = viewer.value
+  if (!state) return null
+  return {
+    camera: { ...state.camera },
+    controls: { ...state.controls },
+    capturedAt: new Date().toISOString(),
+  }
+}
+
 function blobToDataUrl(blob: Blob) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -276,12 +286,14 @@ onMounted(async () => {
   await nextTick()
   await initViewer()
   store.registerSnapshotProvider(captureReviewSnapshot)
+  store.registerSnapshotCameraProvider(currentCameraSnapshot)
   window.addEventListener("resize", renderFrame)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", renderFrame)
   store.registerSnapshotProvider(null)
+  store.registerSnapshotCameraProvider(null)
   if (viewer.value?.animationId) {
     window.cancelAnimationFrame(viewer.value.animationId)
   }

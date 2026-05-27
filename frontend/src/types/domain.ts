@@ -45,6 +45,65 @@ export interface CodeVersion {
   status: "draft" | "rendered" | "error" | "reviewed"
 }
 
+export interface AssetEntitySummary {
+  id: string
+  type: string
+  layer?: string | null
+  points?: number[][]
+  center?: number[] | null
+  radius?: number | null
+  startAngle?: number | null
+  endAngle?: number | null
+  closed?: boolean
+  bounds?: { min: number[]; max: number[] } | null
+}
+
+export interface AssetSummary {
+  format: "dxf" | "stl"
+  units?: string | null
+  bounds?: { min: number[]; max: number[] } | null
+  layers: string[]
+  entityCounts: Record<string, number>
+  entities: AssetEntitySummary[]
+  closedProfiles: Record<string, unknown>[]
+  triangleCount?: number | null
+  solidCount?: number | null
+  isLikelyWatertight?: boolean | null
+  warnings: string[]
+  rawScriptPath?: string | null
+}
+
+export interface CadAsset {
+  id: string
+  projectId: string
+  filename: string
+  format: "dxf" | "stl"
+  status: "uploaded" | "parsed" | "parse_error"
+  byteSize: number
+  originalPath: string
+  summaryPath?: string | null
+  rawScriptPath?: string | null
+  createdAt: string
+  updatedAt: string
+  error?: string | null
+}
+
+export interface AssetDetail {
+  asset: CadAsset
+  summary?: AssetSummary | null
+}
+
+export interface AssetUploadResult extends AssetDetail {}
+
+export interface AssetRebuildRequest {
+  projectId: string
+  assetId: string
+  prompt: string
+  mode?: "reference_rebuild" | "direct_insert"
+  currentVersionId?: string
+  conversationId?: string
+}
+
 export interface Conversation {
   id: string
   projectId: string
@@ -72,6 +131,8 @@ export interface ReviewReport {
   summary: string
   risks: ReviewRisk[]
   drawingUnderstanding: string
+  requirementMatch?: string
+  codeDesignBugs?: string[]
   coldRegionNotes: string[]
   recommendAutoFix: boolean
   observations?: string[]
@@ -94,6 +155,7 @@ export interface ConfigStatus {
   }
   projectsDir: string
   llmTimeoutSeconds: number
+  visionTimeoutSeconds?: number
 }
 
 export interface RunRecord extends JscadRunResult {
@@ -110,7 +172,14 @@ export interface SnapshotArtifact {
   mimeType?: string
   byteSize?: number
   source: string
+  camera?: Record<string, unknown> | null
+  note?: string | null
   createdAt: string
+}
+
+export interface SnapshotCleanupResult {
+  ok: boolean
+  deleted?: number
 }
 
 export interface SaveSnapshotInput {
@@ -118,6 +187,8 @@ export interface SaveSnapshotInput {
   conversationId?: string
   imageBase64: string
   source: string
+  camera?: Record<string, unknown>
+  note?: string
 }
 
 export interface AgentEventBase {
@@ -178,6 +249,7 @@ export interface ChatRequest {
 export interface ReviewRequest {
   projectId: string
   versionId: string
+  conversationId?: string
   snapshotId?: string
   snapshotBase64?: string
   reviewMode?: "review" | "observe_for_change"

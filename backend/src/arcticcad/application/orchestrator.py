@@ -4,8 +4,9 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Awaitable, Callable, TypeVar
 
-from arcticcad.domain import AgentEvent, ChatRequest, JscadRunResult, ReviewRequest
+from arcticcad.domain import AgentEvent, AssetRebuildRequest, ChatRequest, JscadRunResult, ReviewRequest
 from arcticcad.providers import ModelRouter
+from arcticcad.providers.model_router import ModelResult
 from arcticcad.skills import SkillProvider
 from arcticcad.storage.file_store import FileProjectStore, new_id, utc_now
 
@@ -31,6 +32,8 @@ class CadOrchestrator:
         tool: str,
         waiting_message: str,
         call: Callable[[ProgressEmitter], Awaitable[T]],
+        timeout_seconds: float | None = None,
+        timeout_result: T | None = None,
     ) -> AsyncIterator[AgentEvent | T]:
         queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         started = asyncio.get_running_loop().time()
@@ -61,6 +64,17 @@ class CadOrchestrator:
             while True:
                 if task.done():
                     break
+                if timeout_seconds is not None and asyncio.get_running_loop().time() - started >= timeout_seconds:
+                    task.cancel()
+                    heartbeat_task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    if timeout_result is not None:
+                        yield timeout_result
+                        return
+                    raise asyncio.TimeoutError(f"{tool} timed out after {timeout_seconds} seconds")
                 try:
                     yield await asyncio.wait_for(queue.get(), timeout=0.2)
                 except asyncio.TimeoutError:
@@ -221,8 +235,24 @@ class CadOrchestrator:
 
     async def review(self, request: ReviewRequest) -> AsyncIterator[AgentEvent]:
         yield self._event("thinking", message="正在整理当前代码和高寒审图关注点。")
+        project = self.store.get_project(request.projectId)
+        conversation_id = request.conversationId or project.currentConversationId
         versions = self.store.list_versions(request.projectId)
         version = next((item for item in versions if item.id == request.versionId), versions[0] if versions else None)
+        if request.snapshotId:
+            try:
+                snapshot = self.store.get_snapshot(request.projectId, request.snapshotId)
+                conversation_id = str(snapshot.get("conversationId") or conversation_id)
+            except Exception:
+                pass
+        messages = self.store.list_messages(conversation_id)
+        recent_user_requirements = [
+            message.content
+            for message in reversed(messages)
+            if message.role == "user" and message.content.strip()
+        ][:5]
+        requirement_context = "\n".join(reversed(recent_user_requirements))
+        review_prompt = request.userRequirement or "请结合当前对话需求、渲染截图和 JSCAD 代码进行中文审图。"
         image_base64 = request.snapshotBase64
         snapshot_message = "未提供截图，将执行仅代码审图。"
         if request.snapshotId:
@@ -239,16 +269,27 @@ class CadOrchestrator:
         elif image_base64:
             snapshot_message = f"已收到前端内联截图：约 {round(len(image_base64) / 1024, 1)} KB。"
         yield self._event("tool_progress", tool="qwen_vision_review", progress=None, message=snapshot_message)
+        model_config = getattr(self.models, "config", None)
+        vision_config = getattr(model_config, "vision", None)
+        vision_timeout = getattr(model_config, "vision_timeout_seconds", None)
+        vision_provider = getattr(vision_config, "provider", "vision")
         result = None
         async for item in self._run_with_progress(
             tool="qwen_vision_review",
             waiting_message="视觉模型正在审查画布",
             call=lambda emit: self.models.review_image_result(
-                prompt=request.userRequirement or "审查当前高寒建筑草图。",
+                prompt=review_prompt,
                 code=version.code if version else "",
                 image_base64=image_base64,
                 review_mode=request.reviewMode,
+                user_requirement_context=requirement_context,
                 on_progress=emit,
+            ),
+            timeout_seconds=vision_timeout,
+            timeout_result=ModelResult(
+                ok=False,
+                provider=vision_provider,
+                error="视觉模型审图超时，请减少截图尺寸或稍后重试。",
             ),
         ):
             if isinstance(item, AgentEvent):
@@ -277,6 +318,116 @@ class CadOrchestrator:
         report = ReviewReport.model_validate(result.data)
         yield self._event("vision_review", provider=result.provider, report=report)
         yield self._event("done", summary="审图报告已生成。")
+
+    async def reconstruct_from_asset(self, request: AssetRebuildRequest) -> AsyncIterator[AgentEvent]:
+        project = self.store.get_project(request.projectId)
+        asset = self.store.get_asset(request.projectId, request.assetId)
+        summary = self.store.get_asset_summary(request.projectId, request.assetId)
+        if summary is None:
+            yield self._event("error", message="资产尚未完成解析，不能执行重建。", recoverable=True)
+            yield self._event("done", summary="资产重建未执行。")
+            return
+
+        conversation_id = request.conversationId or project.currentConversationId
+        if conversation_id:
+            self.store.set_current_conversation(request.projectId, conversation_id)
+            self.store.add_message(
+                request.projectId,
+                conversation_id,
+                "user",
+                f"基于导入资产 {asset.filename} 重建：{request.prompt}",
+            )
+        versions = self.store.list_versions(request.projectId)
+        current_version = next(
+            (version for version in versions if version.id == (request.currentVersionId or project.currentVersionId)),
+            versions[0] if versions else None,
+        )
+        context = {
+            "project": project.model_dump(mode="json"),
+            "currentVersion": current_version.model_dump(mode="json") if current_version else None,
+        }
+        raw_script_excerpt = ""
+        if asset.rawScriptPath:
+            try:
+                raw_script_path = self.store.asset_content_path(request.projectId, request.assetId, "raw")
+                raw_script_excerpt = raw_script_path.read_text(encoding="utf-8")[:12000]
+            except Exception:
+                raw_script_excerpt = ""
+
+        yield self._event(
+            "thinking",
+            message=f"正在根据导入资产 {asset.filename} 的摘要生成语义化 JSCAD 重建版本。",
+        )
+        if request.mode == "direct_insert" and asset.format == "stl":
+            message = "STL 资产不支持直接插入为主 JSCAD；请使用“作为参考重建”。"
+            yield self._event("user_action_required", message=message, reason=message)
+            yield self._event("done", summary="STL 直接插入已按规则拦截。")
+            return
+
+        skill, loaded = self.skills.load_skill("jscad-authoring")
+        yield self._event(
+            "skill_loading",
+            skill="jscad-authoring",
+            status="done" if loaded else "error",
+            message=None if loaded else "未找到 jscad-authoring skill，已停止资产重建。",
+        )
+        if not loaded:
+            message = "未找到 jscad-authoring skill，不能可靠执行资产重建。"
+            yield self._event("model_error", provider="skill", message=message, error=message, recoverable=True)
+            yield self._event("done", summary="资产重建失败。")
+            return
+
+        yield self._event(
+            "tool_start",
+            tool="deepseek_asset_reconstructor",
+            inputSummary=f"{asset.format.upper()} 资产摘要重建为可读 JSCAD。",
+        )
+        result = None
+        async for item in self._run_with_progress(
+            tool="deepseek_asset_reconstructor",
+            waiting_message="DeepSeek 正在重建导入资产",
+            call=lambda emit: self.models.reconstruct_from_asset(
+                prompt=request.prompt,
+                context=context,
+                asset=asset.model_dump(mode="json"),
+                summary=summary.model_dump(mode="json"),
+                raw_script_excerpt=raw_script_excerpt,
+                mode=request.mode,
+                skill=skill,
+                on_progress=emit,
+            ),
+        ):
+            if isinstance(item, AgentEvent):
+                yield item
+            else:
+                result = item
+        assert result is not None
+        yield self._event(
+            "provider_status",
+            provider=result.provider,
+            ok=result.ok,
+            message="正在使用文本模型进行资产重建。",
+            error=result.error,
+        )
+        if result.reasoningContent:
+            yield self._event("thinking", provider=result.provider, message=result.reasoningContent)
+        if not result.ok or not result.code:
+            message = result.error or "资产重建失败，未写入新版本。"
+            if conversation_id:
+                self.store.add_message(request.projectId, conversation_id, "assistant", message)
+            yield self._event("model_error", provider=result.provider, message=message, error=message, recoverable=True)
+            yield self._event("done", summary="资产重建失败，未写入新版本。")
+            return
+
+        code = result.code
+        yield self._event("code_patch", language="jscad", code=code, summary=f"基于 {asset.filename} 语义重建。")
+        yield self._event("code_write_start", target=f"projects/{request.projectId}/main.js")
+        version = self.store.save_code_version(request.projectId, code, f"基于 {asset.filename} 语义重建。")
+        yield self._event("code_write_done", target=f"projects/{request.projectId}/main.js", versionId=version.id)
+        yield self._event("render_request", reason="资产重建版本写入完成，等待前端执行 JSCAD。")
+        if conversation_id:
+            self.store.add_message(request.projectId, conversation_id, "assistant", f"已基于 {asset.filename} 生成 JSCAD 重建版本。")
+        yield self._event("done", summary="资产重建流程完成。")
 
     def _error_signature(self, result: JscadRunResult) -> str:
         if not result.error:

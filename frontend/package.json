@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "@guolao/vue-monaco-editor": "^1.6.0",
+    "@jscad/dxf-deserializer": "^2.3.30",
     "@jscad/dxf-serializer": "^2.1.23",
     "@jscad/modeling": "^2.13.0",
     "@jscad/regl-renderer": "^2.6.15",
+    "@jscad/stl-deserializer": "^2.1.30",
     "@jscad/stl-serializer": "^2.1.23",
     "@jscad/svg-serializer": "^2.3.21",
     "@tailwindcss/vite": "^4.3.0",

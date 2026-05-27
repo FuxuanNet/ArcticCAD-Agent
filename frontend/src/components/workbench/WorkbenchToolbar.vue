@@ -13,10 +13,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useWorkbenchStore } from "@/stores/workbench"
-import { Bot, Download, Loader2, MessageSquare, Play, ScanSearch, Settings, StopCircle } from "lucide-vue-next"
+import { Bot, Download, FileUp, Loader2, MessageSquare, Play, ScanSearch, Settings, StopCircle } from "lucide-vue-next"
 
 const props = defineProps<{
   onOpenChat: () => void
+  onOpenImport: () => void
+  onOpenReview: () => void
 }>()
 
 const store = useWorkbenchStore()
@@ -40,10 +42,15 @@ const runLabel = computed(() => (store.lastRunResult?.ok ? "已渲染" : "运行
         <Play data-icon="inline-start" />
         {{ runLabel }}
       </Button>
-      <Button variant="outline" size="sm" :disabled="store.isAgentRunning || !store.currentVersionId" @click="store.requestReview">
+      <Button variant="outline" size="sm" :disabled="store.isAgentRunning" @click="props.onOpenImport">
+        <Loader2 v-if="store.isAssetUploading" data-icon="inline-start" class="animate-spin" />
+        <FileUp v-else data-icon="inline-start" />
+        导入
+      </Button>
+      <Button variant="outline" size="sm" :disabled="store.isAgentRunning || !store.currentVersionId" @click="props.onOpenReview">
         <Loader2 v-if="store.isReviewRunning" data-icon="inline-start" class="animate-spin" />
         <ScanSearch v-else data-icon="inline-start" />
-        {{ store.isReviewRunning ? "审图中" : "审图" }}
+        {{ store.isReviewRunning ? "审图中" : "截图审图" }}
       </Button>
       <Button variant="outline" size="sm" @click="props.onOpenChat">
         <MessageSquare data-icon="inline-start" />

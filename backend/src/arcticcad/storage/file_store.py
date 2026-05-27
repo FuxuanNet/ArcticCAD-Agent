@@ -2,13 +2,24 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from typing import Literal
 
-from arcticcad.domain import ChatMessage, CodeVersion, Conversation, CreateProjectInput, JscadRunResult, Project, SnapshotInput
+from arcticcad.domain import (
+    AssetSummary,
+    CadAsset,
+    ChatMessage,
+    CodeVersion,
+    Conversation,
+    CreateProjectInput,
+    JscadRunResult,
+    Project,
+    SnapshotInput,
+)
 
 
 def utc_now() -> str:
@@ -147,6 +158,9 @@ class FileProjectStore:
     def _snapshot_dir(self, project_id: str) -> Path:
         return self._project_dir(project_id) / "snapshots"
 
+    def _asset_dir(self, project_id: str, asset_id: str) -> Path:
+        return self._project_dir(project_id) / "assets" / asset_id
+
     @staticmethod
     def _read_list(path: Path) -> list[dict]:
         if not path.exists():
@@ -221,6 +235,7 @@ class FileProjectStore:
         self._write_json(project_dir / "messages.json", [message.model_dump(mode="json") for message in messages])
         self._write_json(project_dir / "runs.json", [])
         self._write_json(project_dir / "snapshots.json", [])
+        self._write_json(project_dir / "assets.json", [])
         return project
 
     def create_project(self, data: CreateProjectInput) -> Project:
@@ -252,6 +267,7 @@ class FileProjectStore:
         self._write_json(project_dir / "messages.json", [])
         self._write_json(project_dir / "runs.json", [])
         self._write_json(project_dir / "snapshots.json", [])
+        self._write_json(project_dir / "assets.json", [])
         return project
 
     def get_project(self, project_id: str) -> Project:
@@ -442,6 +458,8 @@ class FileProjectStore:
             "byteSize": len(image_bytes),
             "imageBase64": None,
             "source": data.source,
+            "camera": data.camera,
+            "note": data.note,
             "createdAt": utc_now(),
         }
         path = self._json_path(project_id, "snapshots.json")
@@ -458,3 +476,132 @@ class FileProjectStore:
 
     def list_snapshots(self, project_id: str) -> list[dict]:
         return self._read_list(self._json_path(project_id, "snapshots.json"))
+
+    def delete_snapshot(self, project_id: str, snapshot_id: str) -> None:
+        path = self._json_path(project_id, "snapshots.json")
+        snapshots = self._read_list(path)
+        kept: list[dict] = []
+        matched: dict | None = None
+        for snapshot in snapshots:
+            if snapshot.get("id") == snapshot_id:
+                matched = snapshot
+            else:
+                kept.append(snapshot)
+        if matched is None:
+            raise KeyError(snapshot_id)
+        filename = matched.get("filename")
+        if filename:
+            image_path = self._snapshot_dir(project_id) / str(filename)
+            if image_path.exists():
+                image_path.unlink()
+        self._write_json(path, kept)
+
+    def delete_review_snapshots(self, project_id: str) -> int:
+        self.get_project(project_id)
+        deleted = 0
+        for snapshot in list(self._read_list(self._json_path(project_id, "snapshots.json"))):
+            if snapshot.get("source") in {"review", "review-angle"}:
+                self.delete_snapshot(project_id, str(snapshot.get("id")))
+                deleted += 1
+        return deleted
+
+    @staticmethod
+    def _safe_filename(filename: str) -> str:
+        name = Path(filename).name.strip() or "asset"
+        return re.sub(r"[^A-Za-z0-9._\-\u4e00-\u9fff]+", "_", name)[:120] or "asset"
+
+    def save_asset_upload(self, project_id: str, filename: str, content: bytes) -> CadAsset:
+        self.get_project(project_id)
+        safe_name = self._safe_filename(filename)
+        suffix = Path(safe_name).suffix.lower().lstrip(".")
+        if suffix not in {"dxf", "stl"}:
+            raise ValueError("Only DXF and STL files are supported.")
+        asset_id = new_id("asset")
+        asset_dir = self._asset_dir(project_id, asset_id)
+        asset_dir.mkdir(parents=True, exist_ok=True)
+        original_name = f"original.{suffix}"
+        original_path = asset_dir / original_name
+        original_path.write_bytes(content)
+        now = utc_now()
+        asset = CadAsset(
+            id=asset_id,
+            projectId=project_id,
+            filename=safe_name,
+            format=suffix,  # type: ignore[arg-type]
+            status="uploaded",
+            byteSize=len(content),
+            originalPath=f"assets/{asset_id}/{original_name}",
+            createdAt=now,
+            updatedAt=now,
+        )
+        self._write_asset(project_id, asset)
+        return asset
+
+    def _write_asset(self, project_id: str, asset: CadAsset) -> None:
+        asset_dir = self._asset_dir(project_id, asset.id)
+        self._write_json(asset_dir / "metadata.json", asset.model_dump(mode="json"))
+        assets = [CadAsset.model_validate(item) for item in self._read_list(self._json_path(project_id, "assets.json"))]
+        updated = [item for item in assets if item.id != asset.id]
+        updated.insert(0, asset)
+        self._write_json(self._json_path(project_id, "assets.json"), [item.model_dump(mode="json") for item in updated])
+
+    def update_asset_parse_result(
+        self,
+        project_id: str,
+        asset_id: str,
+        *,
+        summary: AssetSummary | None = None,
+        raw_script: str | None = None,
+        error: str | None = None,
+    ) -> CadAsset:
+        asset = self.get_asset(project_id, asset_id)
+        asset_dir = self._asset_dir(project_id, asset_id)
+        summary_path: str | None = asset.summaryPath
+        raw_script_path: str | None = asset.rawScriptPath
+        if raw_script is not None:
+            (asset_dir / "converted.raw.js").write_text(raw_script, encoding="utf-8")
+            raw_script_path = f"assets/{asset_id}/converted.raw.js"
+        if summary is not None:
+            if raw_script_path and not summary.rawScriptPath:
+                summary = summary.model_copy(update={"rawScriptPath": raw_script_path})
+            self._write_json(asset_dir / "summary.json", summary.model_dump(mode="json"))
+            summary_path = f"assets/{asset_id}/summary.json"
+        status = "parsed" if summary is not None and error is None else "parse_error"
+        updated = asset.model_copy(
+            update={
+                "status": status,
+                "summaryPath": summary_path,
+                "rawScriptPath": raw_script_path,
+                "error": error,
+                "updatedAt": utc_now(),
+            }
+        )
+        self._write_asset(project_id, updated)
+        return updated
+
+    def list_assets(self, project_id: str) -> list[CadAsset]:
+        self.get_project(project_id)
+        return [CadAsset.model_validate(item) for item in self._read_list(self._json_path(project_id, "assets.json"))]
+
+    def get_asset(self, project_id: str, asset_id: str) -> CadAsset:
+        metadata_path = self._asset_dir(project_id, asset_id) / "metadata.json"
+        if metadata_path.exists():
+            return CadAsset.model_validate(json.loads(metadata_path.read_text(encoding="utf-8")))
+        for asset in self.list_assets(project_id):
+            if asset.id == asset_id:
+                return asset
+        raise KeyError(asset_id)
+
+    def get_asset_summary(self, project_id: str, asset_id: str) -> AssetSummary | None:
+        summary_path = self._asset_dir(project_id, asset_id) / "summary.json"
+        if not summary_path.exists():
+            return None
+        return AssetSummary.model_validate(json.loads(summary_path.read_text(encoding="utf-8")))
+
+    def asset_content_path(self, project_id: str, asset_id: str, kind: str = "original") -> Path:
+        asset = self.get_asset(project_id, asset_id)
+        if kind == "raw":
+            if not asset.rawScriptPath:
+                raise KeyError(asset_id)
+            return self._project_dir(project_id) / asset.rawScriptPath
+        return self._project_dir(project_id) / asset.originalPath

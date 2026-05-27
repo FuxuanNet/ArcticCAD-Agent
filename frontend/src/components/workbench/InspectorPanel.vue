@@ -70,6 +70,22 @@ const editorOptions = {
             <AlertTitle>审图摘要</AlertTitle>
             <AlertDescription>{{ store.isReviewRunning ? "正在调用视觉模型审查当前画布。" : store.currentReview?.summary || "暂无审图报告。" }}</AlertDescription>
           </Alert>
+          <div v-if="store.currentReview?.requirementMatch" class="grid gap-2">
+            <div class="text-xs font-medium text-muted-foreground">需求匹配</div>
+            <div class="rounded-md border border-border px-3 py-2 text-sm leading-5">
+              {{ store.currentReview.requirementMatch }}
+            </div>
+          </div>
+          <div v-if="store.currentReview?.codeDesignBugs?.length" class="grid gap-2">
+            <div class="text-xs font-medium text-muted-foreground">代码设计问题</div>
+            <div
+              v-for="item in store.currentReview.codeDesignBugs"
+              :key="item"
+              class="rounded-md border border-border px-3 py-2 text-sm leading-5"
+            >
+              {{ item }}
+            </div>
+          </div>
           <div class="grid gap-2">
             <div
               v-for="risk in store.currentReview?.risks || []"
@@ -116,6 +132,25 @@ const editorOptions = {
               class="rounded-md border border-border px-3 py-2 text-xs leading-5 text-muted-foreground"
             >
               {{ item }}
+            </div>
+          </div>
+          <div v-if="store.snapshots.length" class="grid gap-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="text-xs font-medium text-muted-foreground">截图归档</div>
+              <Button size="sm" variant="outline" :disabled="store.isReviewRunning" @click="store.clearReviewSnapshots">
+                清理审图截图
+              </Button>
+            </div>
+            <div
+              v-for="snapshot in store.snapshots.slice(0, 6)"
+              :key="snapshot.id"
+              class="grid grid-cols-[1fr_auto] items-center gap-2 rounded-md border border-border px-3 py-2 text-xs"
+            >
+              <span class="min-w-0 truncate">{{ snapshot.source }} · {{ snapshot.mimeType || "image" }} · {{ snapshot.byteSize ? `${Math.round(snapshot.byteSize / 1024)} KB` : "unknown size" }}</span>
+              <Button size="sm" variant="ghost" @click="store.deleteSnapshot(snapshot.id)">
+                删除
+              </Button>
+              <span class="col-span-2 text-muted-foreground">{{ new Date(snapshot.createdAt).toLocaleString() }}</span>
             </div>
           </div>
           <div v-if="store.runs.length" class="grid gap-2">

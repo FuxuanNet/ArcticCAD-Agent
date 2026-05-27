@@ -1,5 +1,9 @@
 import type {
   AgentEvent,
+  AssetDetail,
+  AssetRebuildRequest,
+  AssetUploadResult,
+  CadAsset,
   ChatMessage,
   ChatRequest,
   CodeVersion,
@@ -11,6 +15,7 @@ import type {
   ReviewRequest,
   RunRecord,
   SaveSnapshotInput,
+  SnapshotCleanupResult,
   SnapshotArtifact,
 } from "@/types/domain"
 import type { AgentGateway, ApiGateway, ProjectGateway } from "./contracts"
@@ -39,6 +44,17 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       "Content-Type": "application/json",
       ...(init?.headers || {}),
     },
+  })
+  if (!response.ok) {
+    throw await parseError(response)
+  }
+  return (await response.json()) as T
+}
+
+async function requestMultipart<T>(path: string, form: FormData): Promise<T> {
+  const response = await fetch(url(path), {
+    method: "POST",
+    body: form,
   })
   if (!response.ok) {
     throw await parseError(response)
@@ -151,6 +167,36 @@ class RemoteProjectGateway implements ProjectGateway {
     return requestJson<SnapshotArtifact[]>(`/api/projects/${encodeURIComponent(projectId)}/snapshots`)
   }
 
+  deleteSnapshot(projectId: string, snapshotId: string) {
+    return requestJson<SnapshotCleanupResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/snapshots/${encodeURIComponent(snapshotId)}`,
+      { method: "DELETE" },
+    )
+  }
+
+  deleteReviewSnapshots(projectId: string) {
+    return requestJson<SnapshotCleanupResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/snapshots?source=review`,
+      { method: "DELETE" },
+    )
+  }
+
+  uploadAsset(projectId: string, file: File) {
+    const form = new FormData()
+    form.append("file", file)
+    return requestMultipart<AssetUploadResult>(`/api/projects/${encodeURIComponent(projectId)}/assets`, form)
+  }
+
+  listAssets(projectId: string) {
+    return requestJson<CadAsset[]>(`/api/projects/${encodeURIComponent(projectId)}/assets`)
+  }
+
+  getAsset(projectId: string, assetId: string) {
+    return requestJson<AssetDetail>(
+      `/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}`,
+    )
+  }
+
   getConfigStatus() {
     return requestJson<ConfigStatus>("/api/config/status")
   }
@@ -167,6 +213,10 @@ class RemoteAgentGateway implements AgentGateway {
 
   requestReview(input: ReviewRequest, options?: { signal?: AbortSignal }) {
     return postSse("/api/agent/review", input, options)
+  }
+
+  reconstructFromAsset(input: AssetRebuildRequest, options?: { signal?: AbortSignal }) {
+    return postSse("/api/agent/reconstruct-from-asset", input, options)
   }
 }
 

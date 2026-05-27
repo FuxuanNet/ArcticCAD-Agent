@@ -5,6 +5,9 @@ import { exportDxf, exportSnapshotSvg, exportStl, type ExportFormat } from "@/se
 import { runJscadCode, type JscadGeometry } from "@/services/jscadRunner"
 import type {
   AgentEvent,
+  AssetDetail,
+  AssetSummary,
+  CadAsset,
   ChatMessage,
   CodeVersion,
   ConfigStatus,
@@ -18,6 +21,10 @@ import type {
 
 const now = () => new Date().toISOString()
 const localId = (prefix: string) => `${prefix}-${Math.random().toString(16).slice(2, 8)}`
+const dataUrlByteSize = (dataUrl: string) => {
+  const encoded = dataUrl.split(",", 2)[1] || ""
+  return Math.floor((encoded.length * 3) / 4)
+}
 type LocalAgentEvent = AgentEvent extends infer Event
   ? Event extends AgentEvent
     ? Omit<Event, "id" | "createdAt">
@@ -31,6 +38,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const messages = ref<ChatMessage[]>([])
   const runs = ref<RunRecord[]>([])
   const snapshots = ref<SnapshotArtifact[]>([])
+  const assets = ref<CadAsset[]>([])
+  const assetDetails = ref<Record<string, AssetDetail>>({})
   const events = ref<AgentEvent[]>([])
   const currentProjectId = ref<string>("")
   const currentVersionId = ref<string>("")
@@ -49,11 +58,23 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const currentReview = ref<ReviewReport | null>(null)
   const inspectorTab = ref<"code" | "review" | "logs">("code")
   const isReviewRunning = ref(false)
+  const activeReviewRunId = ref("")
   const reviewError = ref("")
   const configStatus = ref<ConfigStatus | null>(null)
   const isExporting = ref(false)
   const lastExportError = ref("")
+  const isAssetUploading = ref(false)
+  const assetError = ref("")
+  const selectedAssetId = ref("")
+  const assetRebuildPrompt = ref("")
+  const isAssetRebuilding = ref(false)
+  const reviewPrompt = ref("请优先判断当前渲染效果是否符合本对话里的用户建模需求，再分别指出高寒适配问题和 JSCAD 代码/空间设计问题。请用简体中文返回。")
+  const lastSnapshotCamera = ref<Record<string, unknown> | null>(null)
+  const stagedReviewSnapshotBase64 = ref("")
+  const stagedReviewSnapshotCamera = ref<Record<string, unknown> | null>(null)
+  const stagedReviewSnapshotMeta = ref<{ capturedAt: string; byteSize: number } | null>(null)
   const snapshotProvider = ref<(() => Promise<string | null>) | null>(null)
+  const snapshotCameraProvider = ref<(() => Record<string, unknown> | null) | null>(null)
   const canStopAgent = computed(() => Boolean(activeAgentController.value))
 
   const currentProject = computed(() => projects.value.find((project) => project.id === currentProjectId.value))
@@ -68,6 +89,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
   const conversationMessages = computed(() =>
     messages.value.filter((message) => message.conversationId === currentConversationId.value),
   )
+  const selectedAssetDetail = computed(() => (selectedAssetId.value ? assetDetails.value[selectedAssetId.value] : undefined))
+  const selectedAssetSummary = computed<AssetSummary | null>(() => selectedAssetDetail.value?.summary || null)
 
   async function refreshCurrentProjectData() {
     if (!currentProjectId.value) {
@@ -97,6 +120,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     await loadConversationMessages()
     await loadRuns()
     await loadSnapshots()
+    await loadAssets()
   }
 
   function appendEvent(event: AgentEvent) {
@@ -229,6 +253,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       lastRunResult.value = null
       currentGeometry.value = null
       viewerSnapshotBase64.value = ""
+      clearStagedReviewSnapshot()
       isRepairLoopRunning.value = false
       repairAttempt.value = 0
       repairStoppedReason.value = ""
@@ -236,6 +261,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       await loadConversationMessages()
       await loadRuns()
       await loadSnapshots()
+      await loadAssets()
     } finally {
       isLoading.value = false
     }
@@ -295,6 +321,19 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       return
     }
     snapshots.value = await apiGateway.projects.listSnapshots(currentProjectId.value)
+  }
+
+  async function loadAssets() {
+    if (!currentProjectId.value) {
+      assets.value = []
+      assetDetails.value = {}
+      selectedAssetId.value = ""
+      return
+    }
+    assets.value = await apiGateway.projects.listAssets(currentProjectId.value)
+    if (!selectedAssetId.value && assets.value[0]) {
+      selectedAssetId.value = assets.value[0].id
+    }
   }
 
   async function loadConfigStatus() {
@@ -378,6 +417,10 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     snapshotProvider.value = provider
   }
 
+  function registerSnapshotCameraProvider(provider: (() => Record<string, unknown> | null) | null) {
+    snapshotCameraProvider.value = provider
+  }
+
   function stopRepairLoop() {
     stopRepairRequested.value = true
     isRepairLoopRunning.value = false
@@ -395,11 +438,28 @@ export const useWorkbenchStore = defineStore("workbench", () => {
 
   async function captureCurrentSnapshot() {
     const captured = await snapshotProvider.value?.()
+    lastSnapshotCamera.value = snapshotCameraProvider.value?.() || null
     if (captured) {
       viewerSnapshotBase64.value = captured
       return captured
     }
     return viewerSnapshotBase64.value || ""
+  }
+
+  async function stageReviewSnapshot() {
+    const snapshot = await captureCurrentSnapshot()
+    stagedReviewSnapshotBase64.value = snapshot
+    stagedReviewSnapshotCamera.value = lastSnapshotCamera.value
+    stagedReviewSnapshotMeta.value = snapshot
+      ? { capturedAt: now(), byteSize: dataUrlByteSize(snapshot) }
+      : null
+    return snapshot
+  }
+
+  function clearStagedReviewSnapshot() {
+    stagedReviewSnapshotBase64.value = ""
+    stagedReviewSnapshotCamera.value = null
+    stagedReviewSnapshotMeta.value = null
   }
 
   async function saveCurrentSnapshot(source = "canvas", imageBase64?: string) {
@@ -412,6 +472,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       conversationId: currentConversationId.value || undefined,
       imageBase64: snapshotImage,
       source,
+      camera: lastSnapshotCamera.value || undefined,
+      note: source,
     })
     snapshots.value = [snapshot, ...snapshots.value.filter((item) => item.id !== snapshot.id)]
     return snapshot
@@ -457,12 +519,117 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     await sendMessage(`请根据视觉模型审图建议修改当前 JSCAD 模型：${suggestion}`)
   }
 
+  async function deleteSnapshot(snapshotId: string) {
+    if (!currentProjectId.value) {
+      return
+    }
+    await apiGateway.projects.deleteSnapshot(currentProjectId.value, snapshotId)
+    snapshots.value = snapshots.value.filter((snapshot) => snapshot.id !== snapshotId)
+  }
+
+  async function clearReviewSnapshots() {
+    if (!currentProjectId.value) {
+      return
+    }
+    const result = await apiGateway.projects.deleteReviewSnapshots(currentProjectId.value)
+    await loadSnapshots()
+    appendLocalEvent({
+      type: "tool_result",
+      tool: "snapshot_cleanup",
+      ok: true,
+      resultSummary: `已清理 ${result.deleted || 0} 张审图截图。`,
+    })
+  }
+
+  async function uploadAsset(file: File) {
+    if (!currentProjectId.value) {
+      return null
+    }
+    isAssetUploading.value = true
+    assetError.value = ""
+    try {
+      const detail = await apiGateway.projects.uploadAsset(currentProjectId.value, file)
+      assetDetails.value = { ...assetDetails.value, [detail.asset.id]: detail }
+      assets.value = [detail.asset, ...assets.value.filter((item) => item.id !== detail.asset.id)]
+      selectedAssetId.value = detail.asset.id
+      appendLocalEvent({
+        type: "tool_result",
+        tool: "asset_import",
+        ok: detail.asset.status === "parsed",
+        resultSummary: `${detail.asset.filename} 已导入，状态 ${detail.asset.status}。`,
+      })
+      return detail
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      assetError.value = message
+      appendLocalEvent({ type: "error", message, recoverable: true })
+      return null
+    } finally {
+      isAssetUploading.value = false
+    }
+  }
+
+  async function selectAsset(assetId: string) {
+    selectedAssetId.value = assetId
+    if (!currentProjectId.value || assetDetails.value[assetId]) {
+      return
+    }
+    const detail = await apiGateway.projects.getAsset(currentProjectId.value, assetId)
+    assetDetails.value = { ...assetDetails.value, [assetId]: detail }
+  }
+
+  async function reconstructSelectedAsset(mode: "reference_rebuild" | "direct_insert" = "reference_rebuild") {
+    if (!currentProjectId.value || !selectedAssetId.value) {
+      return
+    }
+    const asset = assets.value.find((item) => item.id === selectedAssetId.value)
+    if (asset?.format === "stl" && mode === "direct_insert") {
+      const message = "STL 资产只作为参考模型使用，不能直接插入为主 JSCAD。"
+      assetError.value = message
+      appendLocalEvent({ type: "error", message, recoverable: true })
+      return
+    }
+    isAgentRunning.value = true
+    isAssetRebuilding.value = true
+    const controller = new AbortController()
+    activeAgentController.value = controller
+    try {
+      const prompt = assetRebuildPrompt.value.trim() || "请基于导入资产摘要重建为语义清晰、可参数化的 JSCAD 模型。"
+      await consumeAgentEvents(apiGateway.agent.reconstructFromAsset({
+        projectId: currentProjectId.value,
+        assetId: selectedAssetId.value,
+        conversationId: currentConversationId.value || undefined,
+        currentVersionId: currentVersionId.value || undefined,
+        prompt,
+        mode,
+      }, { signal: controller.signal }))
+      await refreshCurrentProjectData()
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        appendLocalEvent({ type: "error", message: "用户已终止资产重建。", recoverable: true })
+        return
+      }
+      throw error
+    } finally {
+      isAgentRunning.value = false
+      isAssetRebuilding.value = false
+      if (activeAgentController.value === controller) {
+        activeAgentController.value = null
+      }
+    }
+  }
+
   async function requestReview() {
     if (!currentProjectId.value || !currentVersionId.value) {
       reviewError.value = "当前项目还没有真实 AI 生成的代码版本，无法审图。"
       appendLocalEvent({ type: "error", message: reviewError.value, recoverable: true })
       return
     }
+    if (activeAgentController.value) {
+      activeAgentController.value.abort()
+    }
+    const reviewRunId = localId("review")
+    activeReviewRunId.value = reviewRunId
     isAgentRunning.value = true
     isReviewRunning.value = true
     const controller = new AbortController()
@@ -471,8 +638,14 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     let snapshotId: string | undefined
     try {
       try {
-        const snapshotImage = await captureCurrentSnapshot()
+        const snapshotImage = stagedReviewSnapshotBase64.value || (await stageReviewSnapshot())
+        if (stagedReviewSnapshotCamera.value) {
+          lastSnapshotCamera.value = stagedReviewSnapshotCamera.value
+        }
         const snapshot = await saveCurrentSnapshot("review", snapshotImage)
+        if (activeReviewRunId.value !== reviewRunId || activeAgentController.value !== controller) {
+          return
+        }
         snapshotId = snapshot?.id
         if (snapshot) {
           const sizeText = snapshot.byteSize ? `${Math.round(snapshot.byteSize / 1024)} KB` : "unknown size"
@@ -483,6 +656,7 @@ export const useWorkbenchStore = defineStore("workbench", () => {
             message: `已保存当前视角截图：${snapshot.mimeType || "image"}，${sizeText}。`,
           })
         }
+        clearStagedReviewSnapshot()
       } catch (error) {
         appendLocalEvent({
           type: "error",
@@ -493,24 +667,33 @@ export const useWorkbenchStore = defineStore("workbench", () => {
       for await (const event of apiGateway.agent.requestReview({
         projectId: currentProjectId.value,
         versionId: currentVersionId.value,
+        conversationId: currentConversationId.value || undefined,
         snapshotId,
         reviewMode: "review",
-        userRequirement: "审查当前高寒建筑草图。",
+        userRequirement: reviewPrompt.value.trim() || "请结合当前截图和 JSCAD 代码进行中文审图。",
       }, { signal: controller.signal })) {
+        if (activeReviewRunId.value !== reviewRunId || activeAgentController.value !== controller) {
+          continue
+        }
         appendEvent(event)
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
+        if (activeReviewRunId.value !== reviewRunId) {
+          return
+        }
         reviewError.value = "用户已终止本次审图。"
         appendLocalEvent({ type: "error", message: reviewError.value, recoverable: true })
+        activeReviewRunId.value = ""
         return
       }
       throw error
     } finally {
-      isAgentRunning.value = false
-      isReviewRunning.value = false
       if (activeAgentController.value === controller) {
         activeAgentController.value = null
+        activeReviewRunId.value = ""
+        isAgentRunning.value = false
+        isReviewRunning.value = false
       }
     }
   }
@@ -522,6 +705,8 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     messages,
     runs,
     snapshots,
+    assets,
+    assetDetails,
     events,
     currentProjectId,
     currentVersionId,
@@ -543,6 +728,18 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     configStatus,
     isExporting,
     lastExportError,
+    isAssetUploading,
+    assetError,
+    selectedAssetId,
+    selectedAssetDetail,
+    selectedAssetSummary,
+    assetRebuildPrompt,
+    isAssetRebuilding,
+    reviewPrompt,
+    lastSnapshotCamera,
+    stagedReviewSnapshotBase64,
+    stagedReviewSnapshotCamera,
+    stagedReviewSnapshotMeta,
     currentProject,
     currentVersion,
     currentConversation,
@@ -557,16 +754,26 @@ export const useWorkbenchStore = defineStore("workbench", () => {
     createConversation,
     loadRuns,
     loadSnapshots,
+    loadAssets,
     loadConfigStatus,
     sendMessage,
     runCurrentCode,
     updateViewerSnapshot,
     registerSnapshotProvider,
+    registerSnapshotCameraProvider,
+    captureCurrentSnapshot,
+    stageReviewSnapshot,
+    clearStagedReviewSnapshot,
     stopRepairLoop,
     stopActiveAgent,
     saveCurrentSnapshot,
+    deleteSnapshot,
+    clearReviewSnapshots,
     exportCurrentGeometry,
     applyReviewSuggestion,
+    uploadAsset,
+    selectAsset,
+    reconstructSelectedAsset,
     requestReview,
   }
 })

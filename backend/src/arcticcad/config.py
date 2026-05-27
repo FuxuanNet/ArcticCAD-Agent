@@ -41,6 +41,7 @@ class AppConfig:
     llm: ModelConfig
     vision: ModelConfig
     llm_timeout_seconds: float
+    vision_timeout_seconds: float
 
 
 def load_app_config() -> AppConfig:
@@ -66,6 +67,7 @@ def load_app_config() -> AppConfig:
             model=os.environ.get("CADX_LLM_VISION_MODEL", "Qwen/Qwen3.5-9B"),
         ),
         llm_timeout_seconds=float(os.environ.get("CADX_LLM_TIMEOUT_SECONDS", "1800")),
+        vision_timeout_seconds=float(os.environ.get("CADX_LLM_VISION_TIMEOUT_SECONDS", "120")),
     )
 
 
