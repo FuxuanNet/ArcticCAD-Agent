@@ -1,6 +1,6 @@
-# 寒地智建
+# 高寒智建
 
-寒地智建：面向高寒地区建筑图纸生成与审核的智能体平台。
+高寒智建：面向高寒地区建筑图纸生成与审核的智能体平台。
 
 工程代号：ArcticCAD-Agent。
 
@@ -35,6 +35,7 @@ ArcticCAD 项目级 skill 统一放在根目录 `.agents/skills/<skill-name>/SKI
 
 ```bash
 cd frontend
+$env:VITE_API_BASE_URL="http://127.0.0.1:8765"
 npm run dev
 ```
 

@@ -2,7 +2,7 @@
 
 ## 目的
 
-JSCAD 是寒地智建 MVP 的核心图纸表达语言。为了避免智能体凭记忆编造不存在的 API，必须建立 `jscad-authoring` skill，让智能体在生成、修改和修复代码前读取稳定的 JSCAD 写作规范。
+JSCAD 是高寒智建 MVP 的核心图纸表达语言。为了避免智能体凭记忆编造不存在的 API，必须建立 `jscad-authoring` skill，让智能体在生成、修改和修复代码前读取稳定的 JSCAD 写作规范。
 
 该 skill 的目标是：
 

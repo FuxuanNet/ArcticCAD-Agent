@@ -2,9 +2,9 @@
 
 ## 总体选择
 
-寒地智建采用 `frontend/`、`backend/`、`docs/` 三层工程结构。`frontend/` 是 Vue/Vite/shadcn-vue 工作台，`backend/` 是基于 OpenHarness 领域化改造的 CAD Agent 后端，`docs/` 存放需求、架构、技术路线、MVP、UI 和 JSCAD skill 文档。
+高寒智建采用 `frontend/`、`backend/`、`docs/` 三层工程结构。`frontend/` 是 Vue/Vite/shadcn-vue 工作台，`backend/` 是基于 OpenHarness 领域化改造的 CAD Agent 后端，`docs/` 存放需求、架构、技术路线、MVP、UI 和 JSCAD skill 文档。
 
-系统不是传统 MCP-only 架构。MCP 更适合暴露工具，而寒地智建需要完整的智能体任务编排、代码生成、工具调用、状态流、错误修复、视觉审图和项目归档能力。因此后端优先复用 OpenHarness 的 agent loop、tools、skills、memory、permissions、stream-json 事件等能力，并裁剪为 CAD 专用 harness。
+系统不是传统 MCP-only 架构。MCP 更适合暴露工具，而高寒智建需要完整的智能体任务编排、代码生成、工具调用、状态流、错误修复、视觉审图和项目归档能力。因此后端优先复用 OpenHarness 的 agent loop、tools、skills、memory、permissions、stream-json 事件等能力，并裁剪为 CAD 专用 harness。
 
 ## 工程目录
 

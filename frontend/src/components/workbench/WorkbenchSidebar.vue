@@ -15,7 +15,7 @@ const router = useRouter()
   <aside class="flex h-full w-[248px] shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
     <div class="flex h-14 items-center justify-between gap-2 px-3">
       <div class="min-w-0">
-        <h1 class="truncate text-sm font-semibold">寒地智建</h1>
+        <h1 class="truncate text-sm font-semibold">高寒智建</h1>
         <p class="truncate text-xs text-muted-foreground">CAD Agent 工作台</p>
       </div>
       <Button variant="ghost" size="icon" @click="router.push('/settings')">

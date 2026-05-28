@@ -29,7 +29,7 @@ async function createProject() {
           <Snowflake />
         </div>
         <div class="min-w-0">
-          <h1 class="truncate text-sm font-semibold">寒地智建</h1>
+          <h1 class="truncate text-sm font-semibold">高寒智建</h1>
           <p class="truncate text-xs text-muted-foreground">ArcticCAD-Agent 工作区</p>
         </div>
       </div>
